@@ -5,43 +5,32 @@ from decimal import Decimal
 import sqlite3
 
 
-def gas(filename, state_metadata_id, statistics_metadata_id: int):
-    DATE_KEY = "DATA LETTURA"
-    with open(filename, "r") as f:
-        lines = list(csv.DictReader(f, delimiter=";"))
-        lines.sort(key=lambda l: l.get(DATE_KEY, ""))
-        process_lines(
-            lines=lines,
-            statistics_metadata_id=statistics_metadata_id,
-            state_metadata_id=state_metadata_id,
-            date_key=DATE_KEY,
-            date_format="%Y-%m-%d",
-            lettura_key="LETTURA",
-        )
-
-
 def process_lines(
     lines: list[dict],
     statistics_metadata_id: int,
     state_metadata_id: int,
-    date_key: str,
-    date_format: str,
+    data_lettura_key: str,
+    data_lettura_format: str,
     lettura_key: str,
-):
+) -> None:
     state, sum = get_latest_state_and_sum(statistics_metadata_id=statistics_metadata_id)
     for i in range(len(lines)):
         try:
-            from_date = datetime.strptime(lines[i][date_key], date_format)
+            from_date = datetime.strptime(
+                lines[i][data_lettura_key], data_lettura_format
+            )
             lettura = Decimal(lines[i][lettura_key].lstrip("0"))
         except:
             continue
 
-        if lettura < state:
+        if lettura <= state:
             continue
         sum += lettura - state
         state = lettura
         try:
-            to_date = datetime.strptime(lines[i + 1][date_key], date_format)
+            to_date = datetime.strptime(
+                lines[i + 1][data_lettura_key], data_lettura_format
+            )
         except IndexError:
             to_date = datetime.now()
 
@@ -55,28 +44,46 @@ def process_lines(
         )
 
 
+def gas(filename: str, state_metadata_id: int, statistics_metadata_id: int) -> None:
+    DATA_LETTURA_KEY = "DATA LETTURA"
+    DATA_LETTURA_FORMAT = "%Y-%m-%d"
+
+    with open(filename, "r") as f:
+        lines = list(csv.DictReader(f, delimiter=";"))
+        lines.sort(key=lambda l: l.get(DATA_LETTURA_KEY, ""))
+        process_lines(
+            lines=lines,
+            statistics_metadata_id=statistics_metadata_id,
+            state_metadata_id=state_metadata_id,
+            data_lettura_key=DATA_LETTURA_KEY,
+            data_lettura_format=DATA_LETTURA_FORMAT,
+            lettura_key="LETTURA",
+        )
+
+
 def luce_giornaliera(
-    filename,
-    state_meta_ids: list[int],
-    statistics_meta_ids: list[int],
-    update_since: datetime = datetime.now(),
-):
-    DATE_KEY = "data_lettura"
-    DATE_FORMAT = "%d/%m/%Y"
+    filename: str,
+    state_metadata_ids: list[int],
+    statistics_metadata_ids: list[int],
+) -> None:
+    DATA_LETTURA_KEY = "data_lettura"
+    DATA_LETTURA_FORMAT = "%d/%m/%Y"
     FASCE = [1, 2, 3]
 
     with open(filename, "r") as f:
         lines = list(csv.DictReader(f, delimiter=";"))
-        lines.sort(key=lambda l: datetime.strptime(l[DATE_KEY], DATE_FORMAT))
+        lines.sort(
+            key=lambda l: datetime.strptime(l[DATA_LETTURA_KEY], DATA_LETTURA_FORMAT)
+        )
         for fascia, statistics_metadata_id, state_metadata_id in zip(
-            FASCE, statistics_meta_ids, state_meta_ids
+            FASCE, statistics_metadata_ids, state_metadata_ids
         ):
             process_lines(
                 lines=lines,
                 statistics_metadata_id=statistics_metadata_id,
                 state_metadata_id=state_metadata_id,
-                date_key=DATE_KEY,
-                date_format="%Y-%m-%d",
+                data_lettura_key=DATA_LETTURA_KEY,
+                data_lettura_format=DATA_LETTURA_FORMAT,
                 lettura_key=f"lettura_f{fascia}",
             )
 
@@ -86,7 +93,7 @@ def update_state(
     state: Decimal,
     from_date: datetime,
     to_date: datetime = datetime.now(),
-):
+) -> None:
     cur.execute(
         """
         UPDATE states 
@@ -110,10 +117,17 @@ def run_sql(
     state_metadata_id: int,
     from_date: datetime,
     to_date: datetime = datetime.now(),
-):
+) -> None:
     for table in ["statistics", "statistics_short_term"]:
         cur.execute(
-            "UPDATE {} SET state={}, sum={} WHERE metadata_id={} AND start_ts>={} AND start_ts<{};".format(
+            """
+            UPDATE {}
+            SET state={}, sum={} 
+            WHERE 
+                metadata_id={} AND
+                start_ts>={} AND 
+                start_ts<{};
+            """.format(
                 table,
                 state,
                 sum,
