@@ -5,41 +5,112 @@ from decimal import Decimal
 import sqlite3
 
 
+class Lettura:
+    def __init__(self, data_lettura: datetime) -> None:
+        self.data_lettura: datetime = data_lettura
+
+    @property
+    def lettura(self) -> Decimal:
+        return NotImplemented
+
+    def __lt__(self, value) -> bool:
+        if isinstance(value, Lettura):
+            return self.data_lettura < value.data_lettura
+        return NotImplemented
+
+    def __le__(self, value) -> bool:
+        if isinstance(value, Lettura):
+            return self.data_lettura <= value.data_lettura
+        return NotImplemented
+
+    def __gt__(self, value) -> bool:
+        if isinstance(value, Lettura):
+            return self.data_lettura > value.data_lettura
+        return NotImplemented
+
+    def __ge__(self, value) -> bool:
+        if isinstance(value, Lettura):
+            return self.data_lettura >= value.data_lettura
+        return NotImplemented
+
+    def __eq__(self, value: object) -> bool:
+        if isinstance(value, Lettura):
+            return self.data_lettura == value.data_lettura
+        return NotImplemented
+
+
+class LetturaGas(Lettura):
+    DATA_LETTURA_KEY = "DATA LETTURA"
+    DATA_LETTURA_FORMAT = "%Y-%m-%d"
+
+    def __init__(self, LETTURA, **kwargs) -> None:
+        super().__init__(
+            datetime.strptime(kwargs[self.DATA_LETTURA_KEY], self.DATA_LETTURA_FORMAT),
+        )
+        self._lettura = Decimal(LETTURA.lstrip("0"))
+
+    @property
+    def lettura(self) -> Decimal:
+        return self._lettura
+
+    def __repr__(self) -> str:
+        return f"{self.data_lettura} - {self.lettura} m3"
+
+
+class LetturaLuce(Lettura):
+    DATA_LETTURA_FORMAT = "%d/%m/%Y"
+
+    def __init__(
+        self,
+        data_lettura: str,
+        lettura_f1: str,
+        lettura_f2: str,
+        lettura_f3: str,
+        **kwargs,
+    ) -> None:
+        super().__init__(datetime.strptime(data_lettura, self.DATA_LETTURA_FORMAT))
+        self.lettura_f1 = Decimal(lettura_f1)
+        self.lettura_f2 = Decimal(lettura_f2)
+        self.lettura_f3 = Decimal(lettura_f3)
+        self.default = 0
+
+    def __repr__(self) -> str:
+        return f"{self.data_lettura} - F1 {self.lettura_f1} kWh, F2 {self.lettura_f2} kWh, F3 {self.lettura_f3} kWh"
+
+    @property
+    def lettura(self) -> Decimal:
+        return getattr(self, f"lettura_f{self.default}")
+
+
 def process_lines(
-    lines: list[dict],
+    letture: list[LetturaGas] | list[LetturaLuce],
     statistics_metadata_id: int,
     state_metadata_id: int,
-    data_lettura_key: str,
-    data_lettura_format: str,
-    lettura_key: str,
 ) -> None:
     state, sum = get_latest_state_and_sum(statistics_metadata_id=statistics_metadata_id)
-    for i in range(len(lines)):
-        try:
-            from_date = datetime.strptime(
-                lines[i][data_lettura_key], data_lettura_format
-            )
-            lettura = Decimal(lines[i][lettura_key].lstrip("0"))
-        except:
-            continue
+    for i in range(len(letture)):
 
-        if lettura <= state:
+        if letture[i].lettura <= state:
             continue
-        sum += lettura - state
-        state = lettura
+        sum += letture[i].lettura - state
+        state = letture[i].lettura
+
         try:
-            to_date = datetime.strptime(
-                lines[i + 1][data_lettura_key], data_lettura_format
-            )
+            to_date = letture[i + 1].data_lettura
         except IndexError:
             to_date = datetime.now()
 
-        run_sql(
-            state=lettura,
+        update_states(
+            state_metadata_id=state_metadata_id,
+            state=letture[i].lettura,
+            from_date=letture[i].data_lettura,
+            to_date=to_date,
+        )
+        update_statistics(
+            state=letture[i].lettura,
             sum=sum,
             statistics_metadata_id=statistics_metadata_id,
-            state_metadata_id=state_metadata_id,
-            from_date=from_date,
+            from_date=letture[i].data_lettura,
             to_date=to_date,
         )
 
@@ -61,42 +132,36 @@ def get_metadata_ids(sensor: str) -> dict[str, int]:
 
 
 def gas(filename: str, sensor: str) -> None:
-    DATA_LETTURA_KEY = "DATA LETTURA"
-    DATA_LETTURA_FORMAT = "%Y-%m-%d"
-
     with open(filename, "r") as f:
-        lines = list(csv.DictReader(f, delimiter=";"))
-        lines.sort(key=lambda l: l.get(DATA_LETTURA_KEY, ""))
+        letture = []
+        for line in csv.DictReader(f, delimiter=";"):
+            try:
+                letture.append(LetturaGas(**line))
+            except:
+                continue
+        letture.sort()
         process_lines(
-            lines=lines,
+            letture=letture,
             **get_metadata_ids(sensor=sensor),
-            data_lettura_key=DATA_LETTURA_KEY,
-            data_lettura_format=DATA_LETTURA_FORMAT,
-            lettura_key="LETTURA",
         )
 
 
 def luce_giornaliera(filename: str, sensors: list[str]) -> None:
-    DATA_LETTURA_KEY = "data_lettura"
-    DATA_LETTURA_FORMAT = "%d/%m/%Y"
     FASCE = [1, 2, 3]
 
     with open(filename, "r") as f:
-        lines = list(csv.DictReader(f, delimiter=";"))
-        lines.sort(
-            key=lambda l: datetime.strptime(l[DATA_LETTURA_KEY], DATA_LETTURA_FORMAT)
-        )
+        letture = [LetturaLuce(**line) for line in csv.DictReader(f, delimiter=";")]
+        letture.sort()
         for fascia, sensor in zip(FASCE, sensors):
+            for lettura in letture:
+                lettura.default = fascia
             process_lines(
-                lines=lines,
+                letture=letture,
                 **get_metadata_ids(sensor=sensor),
-                data_lettura_key=DATA_LETTURA_KEY,
-                data_lettura_format=DATA_LETTURA_FORMAT,
-                lettura_key=f"lettura_f{fascia}",
             )
 
 
-def update_state(
+def update_states(
     state_metadata_id: int,
     state: Decimal,
     from_date: datetime,
@@ -118,11 +183,10 @@ def update_state(
     )
 
 
-def run_sql(
+def update_statistics(
     state: Decimal,
     sum: Decimal,
     statistics_metadata_id: int,
-    state_metadata_id: int,
     from_date: datetime,
     to_date: datetime = datetime.now(),
 ) -> None:
@@ -144,12 +208,6 @@ def run_sql(
                 to_date.timestamp(),
             )
         )
-    update_state(
-        state_metadata_id=state_metadata_id,
-        state=state,
-        from_date=from_date,
-        to_date=to_date,
-    )
 
 
 def get_latest_state_and_sum(
