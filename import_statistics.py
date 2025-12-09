@@ -44,7 +44,23 @@ def process_lines(
         )
 
 
-def gas(filename: str, state_metadata_id: int, statistics_metadata_id: int) -> None:
+def get_metadata_ids(sensor: str) -> dict[str, int]:
+    ids = {}
+
+    res = cur.execute(
+        f'SELECT metadata_id FROM states_meta WHERE entity_id = "sensor.{sensor}"'
+    )
+    ids["state_metadata_id"] = res.fetchone()
+
+    res = cur.execute(
+        f'SELECT id FROM statistics_meta WHERE statistic_id = "sensor.{sensor}"'
+    )
+    ids["statistics_metadata_id"] = res.fetchone()
+
+    return ids
+
+
+def gas(filename: str, sensor: str) -> None:
     DATA_LETTURA_KEY = "DATA LETTURA"
     DATA_LETTURA_FORMAT = "%Y-%m-%d"
 
@@ -53,19 +69,14 @@ def gas(filename: str, state_metadata_id: int, statistics_metadata_id: int) -> N
         lines.sort(key=lambda l: l.get(DATA_LETTURA_KEY, ""))
         process_lines(
             lines=lines,
-            statistics_metadata_id=statistics_metadata_id,
-            state_metadata_id=state_metadata_id,
+            **get_metadata_ids(sensor=sensor),
             data_lettura_key=DATA_LETTURA_KEY,
             data_lettura_format=DATA_LETTURA_FORMAT,
             lettura_key="LETTURA",
         )
 
 
-def luce_giornaliera(
-    filename: str,
-    state_metadata_ids: list[int],
-    statistics_metadata_ids: list[int],
-) -> None:
+def luce_giornaliera(filename: str, sensors: list[str]) -> None:
     DATA_LETTURA_KEY = "data_lettura"
     DATA_LETTURA_FORMAT = "%d/%m/%Y"
     FASCE = [1, 2, 3]
@@ -75,13 +86,10 @@ def luce_giornaliera(
         lines.sort(
             key=lambda l: datetime.strptime(l[DATA_LETTURA_KEY], DATA_LETTURA_FORMAT)
         )
-        for fascia, statistics_metadata_id, state_metadata_id in zip(
-            FASCE, statistics_metadata_ids, state_metadata_ids
-        ):
+        for fascia, sensor in zip(FASCE, sensors):
             process_lines(
                 lines=lines,
-                statistics_metadata_id=statistics_metadata_id,
-                state_metadata_id=state_metadata_id,
+                **get_metadata_ids(sensor=sensor),
                 data_lettura_key=DATA_LETTURA_KEY,
                 data_lettura_format=DATA_LETTURA_FORMAT,
                 lettura_key=f"lettura_f{fascia}",
@@ -173,14 +181,11 @@ if __name__ == "__main__":
         headers = f.readline()
         if headers.startswith("PDR"):
             print(f"Importing GAS statistics from '{args.csv}'")
-            gas(args.csv, state_metadata_id=259, statistics_metadata_id=18)
+            gas(filename=args.csv, sensor="lettura_gas")
         elif headers.startswith("pod"):
             print(f"Importing ENERGY statistics from '{args.csv}'")
             luce_giornaliera(
-                args.csv,
-                state_meta_ids=[256, 257, 258],
-                statistics_meta_ids=[11, 12, 13],
-                update_since=datetime(2025, 10, 9),
+                filename=args.csv, sensors=[f"lettura_luce_f{i}" for i in [1, 2, 3]]
             )
         else:
             print(f"{args.csv} not recognized, exit.")
