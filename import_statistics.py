@@ -78,25 +78,21 @@ def import_letture(letture: list[Lettura], sensor_name: str) -> None:
     state_metadata_id, statistics_metadata_id = get_metadata_ids(
         id=f"sensor.{sensor_name}"
     )
-    state = get_state(state_metadata_id=state_metadata_id)
-    print(f"Importing statistics to sensor '{sensor_name}' (current state: {state}).")
+    print(f"Importing statistics to sensor '{sensor_name}'.")
     letture.sort()
     for i in range(len(letture)):
-        if letture[i].lettura > state:
-            try:
-                max_date = letture[i + 1].data_lettura
-            except IndexError:
-                max_date = datetime.now()
-            data = {
-                "state": float(letture[i].lettura),
-                "state_metadata_id": state_metadata_id,
-                "statistics_metadata_id": statistics_metadata_id,
-                "min_ts": letture[i].data_lettura.timestamp(),
-                "max_ts": max_date.timestamp(),
-            }
-            update_states(**data)
-            update_statistics(**data)
-            print(f"Imported {letture[i]}.")
+        data = {
+            "state": float(letture[i].lettura),
+            "state_metadata_id": state_metadata_id,
+            "statistics_metadata_id": statistics_metadata_id,
+            "min_ts": letture[i].data_lettura.timestamp(),
+            "max_ts": (
+                letture[i + 1].data_lettura if i + 1 < len(letture) else datetime.now()
+            ).timestamp(),
+        }
+        update_states(**data)
+        update_statistics(**data)
+        print(f"Imported {letture[i]}.")
 
 
 def get_metadata_ids(id: str) -> tuple[int, int]:
@@ -107,24 +103,14 @@ def get_metadata_ids(id: str) -> tuple[int, int]:
     return state_metadata_id, statistics_metadata_id
 
 
-def get_state(state_metadata_id: int) -> Decimal:
-    res = cur.execute(
-        "SELECT state FROM states WHERE metadata_id = ? ORDER BY state_id DESC LIMIT 1;",
-        (state_metadata_id,),
-    )
-    (state,) = res.fetchone()
-    return Decimal(state)
-
-
 def update_states(**kwargs) -> None:
     cur.execute(
         """
         UPDATE states
         SET state = :state
         WHERE
-            last_changed_ts IS NULL AND
+            state < :state AND
             states.metadata_id = :state_metadata_id AND
-            last_reported_ts IS NULL AND
             last_updated_ts >= :min_ts AND
             last_updated_ts < :max_ts;
         """,
@@ -137,8 +123,9 @@ def update_statistics(**kwargs) -> None:
         cur.execute(
             f"""
             UPDATE {table}
-            SET state = :state, sum = ROUND(sum + state - :state, 2)
+            SET state = :state, sum = ROUND(sum + state - :state, 3)
             WHERE
+                state < :state AND
                 metadata_id = :statistics_metadata_id AND
                 start_ts >= :min_ts AND
                 start_ts < :max_ts;
