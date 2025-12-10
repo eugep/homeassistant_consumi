@@ -8,10 +8,7 @@ import sqlite3
 class Lettura:
     def __init__(self, data_lettura: datetime) -> None:
         self.data_lettura: datetime = data_lettura
-
-    @property
-    def lettura(self) -> Decimal:
-        return NotImplemented
+        self.letture = None
 
     def __lt__(self, value) -> bool:
         if isinstance(value, Lettura):
@@ -40,26 +37,17 @@ class Lettura:
 
 
 class LetturaGas(Lettura):
-    DATA_LETTURA_KEY = "DATA LETTURA"
-    DATA_LETTURA_FORMAT = "%Y-%m-%d"
-
     def __init__(self, LETTURA, **kwargs) -> None:
         super().__init__(
-            datetime.strptime(kwargs[self.DATA_LETTURA_KEY], self.DATA_LETTURA_FORMAT),
+            datetime.strptime(kwargs["DATA LETTURA"], "%Y-%m-%d"),
         )
-        self._lettura = Decimal(LETTURA.lstrip("0"))
-
-    @property
-    def lettura(self) -> Decimal:
-        return self._lettura
+        self.lettura = Decimal(LETTURA.lstrip("0"))
 
     def __repr__(self) -> str:
-        return f"{self.data_lettura} - {self.lettura} m3"
+        return f"{self.data_lettura} - {self.lettura} m³"
 
 
 class LetturaLuce(Lettura):
-    DATA_LETTURA_FORMAT = "%d/%m/%Y"
-
     def __init__(
         self,
         data_lettura: str,
@@ -68,7 +56,7 @@ class LetturaLuce(Lettura):
         lettura_f3: str,
         **kwargs,
     ) -> None:
-        super().__init__(datetime.strptime(data_lettura, self.DATA_LETTURA_FORMAT))
+        super().__init__(datetime.strptime(data_lettura, "%d/%m/%Y"))
         self.lettura_f1 = Decimal(lettura_f1)
         self.lettura_f2 = Decimal(lettura_f2)
         self.lettura_f3 = Decimal(lettura_f3)
@@ -83,11 +71,14 @@ class LetturaLuce(Lettura):
 
 
 def process_lines(
-    letture: list[LetturaGas] | list[LetturaLuce],
-    statistics_metadata_id: int,
-    state_metadata_id: int,
+    letture: list[LetturaGas] | list[LetturaLuce], sensor_name: str
 ) -> None:
-    state, sum = get_latest_state_and_sum(statistics_metadata_id=statistics_metadata_id)
+    state_metadata_id, statistics_metadata_id = get_metadata(id=f"sensor.{sensor_name}")
+    state, sum = get_latest_state_and_sum(
+        state_metadata_id=state_metadata_id,
+        statistics_metadata_id=statistics_metadata_id,
+    )
+    letture.sort()
     for i in range(len(letture)):
 
         if letture[i].lettura <= state:
@@ -115,20 +106,12 @@ def process_lines(
         )
 
 
-def get_metadata_ids(sensor: str) -> dict[str, int]:
-    ids = {}
-
-    res = cur.execute(
-        f'SELECT metadata_id FROM states_meta WHERE entity_id = "sensor.{sensor}"'
-    )
-    ids["state_metadata_id"] = res.fetchone()
-
-    res = cur.execute(
-        f'SELECT id FROM statistics_meta WHERE statistic_id = "sensor.{sensor}"'
-    )
-    ids["statistics_metadata_id"] = res.fetchone()
-
-    return ids
+def get_metadata(id: str) -> tuple[int, int]:
+    res = cur.execute("SELECT metadata_id FROM states_meta WHERE entity_id = ?", (id,))
+    (state_metadata_id,) = res.fetchone()
+    res = cur.execute("SELECT id FROM statistics_meta WHERE statistic_id = ?", (id,))
+    (statistics_metadata_id,) = res.fetchone()
+    return state_metadata_id, statistics_metadata_id
 
 
 def gas(filename: str, sensor: str) -> None:
@@ -139,25 +122,21 @@ def gas(filename: str, sensor: str) -> None:
                 letture.append(LetturaGas(**line))
             except:
                 continue
-        letture.sort()
         process_lines(
             letture=letture,
-            **get_metadata_ids(sensor=sensor),
+            sensor_name=sensor,
         )
 
 
 def luce_giornaliera(filename: str, sensors: list[str]) -> None:
-    FASCE = [1, 2, 3]
-
     with open(filename, "r") as f:
         letture = [LetturaLuce(**line) for line in csv.DictReader(f, delimiter=";")]
-        letture.sort()
         for fascia, sensor in zip(FASCE, sensors):
             for lettura in letture:
                 lettura.default = fascia
             process_lines(
                 letture=letture,
-                **get_metadata_ids(sensor=sensor),
+                sensor_name=sensor,
             )
 
 
@@ -170,16 +149,15 @@ def update_states(
     cur.execute(
         """
         UPDATE states 
-        SET state = {} 
+        SET state = ? 
         WHERE 
             last_changed_ts IS NULL AND 
-            states.metadata_id = {} AND 
+            states.metadata_id = ? AND 
             last_reported_ts IS NULL AND
-            last_updated_ts>={} AND 
-            last_updated_ts<{};
-        """.format(
-            state, state_metadata_id, from_date.timestamp(), to_date.timestamp()
-        )
+            last_updated_ts >= ? AND 
+            last_updated_ts < ?;
+        """,
+        (state, state_metadata_id, from_date.timestamp(), to_date.timestamp()),
     )
 
 
@@ -193,33 +171,38 @@ def update_statistics(
     for table in ["statistics", "statistics_short_term"]:
         cur.execute(
             """
-            UPDATE {}
-            SET state={}, sum={} 
+            UPDATE ?
+            SET state = ?, sum = ? 
             WHERE 
-                metadata_id={} AND
-                start_ts>={} AND 
-                start_ts<{};
-            """.format(
+                metadata_id = ? AND
+                start_ts >= ? AND 
+                start_ts < ?;
+            """,
+            (
                 table,
                 state,
                 sum,
                 statistics_metadata_id,
                 from_date.timestamp(),
                 to_date.timestamp(),
-            )
+            ),
         )
 
 
 def get_latest_state_and_sum(
-    statistics_metadata_id: int, date_limit: datetime = datetime.now()
+    state_metadata_id: int, statistics_metadata_id: int
 ) -> tuple[Decimal, Decimal]:
     res = cur.execute(
-        'SELECT state, "sum" FROM statistics WHERE metadata_id = {} AND start_ts < {} ORDER BY id DESC LIMIT 1;'.format(
-            statistics_metadata_id, date_limit.timestamp()
-        )
+        "SELECT state FROM states WHERE metadata_id = ? ORDER BY state_id DESC LIMIT 1;",
+        (state_metadata_id,),
     )
-    state, sum = res.fetchone()
-    return Decimal(str(state)), Decimal(str(sum))
+    (state,) = res.fetchone()
+    res = cur.execute(
+        "SELECT sum FROM statistics WHERE metadata_id = ? ORDER BY id DESC LIMIT 1;",
+        (statistics_metadata_id,),
+    )
+    (sum,) = res.fetchone()
+    return Decimal(state), Decimal(str(sum))
 
 
 if __name__ == "__main__":
@@ -242,8 +225,9 @@ if __name__ == "__main__":
             gas(filename=args.csv, sensor="lettura_gas")
         elif headers.startswith("pod"):
             print(f"Importing ENERGY statistics from '{args.csv}'")
+            FASCE = [1, 2, 3]
             luce_giornaliera(
-                filename=args.csv, sensors=[f"lettura_luce_f{i}" for i in [1, 2, 3]]
+                filename=args.csv, sensors=[f"lettura_luce_f{i}" for i in FASCE]
             )
         else:
             print(f"{args.csv} not recognized, exit.")
