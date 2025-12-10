@@ -74,36 +74,24 @@ def process_lines(
     letture: list[LetturaGas] | list[LetturaLuce], sensor_name: str
 ) -> None:
     state_metadata_id, statistics_metadata_id = get_metadata(id=f"sensor.{sensor_name}")
-    state, sum = get_latest_state_and_sum(
-        state_metadata_id=state_metadata_id,
-        statistics_metadata_id=statistics_metadata_id,
-    )
+    state = get_state(state_metadata_id=state_metadata_id)
     letture.sort()
     for i in range(len(letture)):
+        if letture[i].lettura > state:
+            try:
+                to_date = letture[i + 1].data_lettura
+            except IndexError:
+                to_date = datetime.now()
 
-        if letture[i].lettura <= state:
-            continue
-        sum += letture[i].lettura - state
-        state = letture[i].lettura
-
-        try:
-            to_date = letture[i + 1].data_lettura
-        except IndexError:
-            to_date = datetime.now()
-
-        update_states(
-            state_metadata_id=state_metadata_id,
-            state=letture[i].lettura,
-            from_date=letture[i].data_lettura,
-            to_date=to_date,
-        )
-        update_statistics(
-            state=letture[i].lettura,
-            sum=sum,
-            statistics_metadata_id=statistics_metadata_id,
-            from_date=letture[i].data_lettura,
-            to_date=to_date,
-        )
+            data = {
+                "state": float(letture[i].lettura),
+                "state_metadata_id": state_metadata_id,
+                "statistics_metadata_id": statistics_metadata_id,
+                "from_ts": letture[i].data_lettura.timestamp(),
+                "to_ts": to_date.timestamp(),
+            }
+            update_states(**data)
+            update_statistics(**data)
 
 
 def get_metadata(id: str) -> tuple[int, int]:
@@ -140,69 +128,44 @@ def luce_giornaliera(filename: str, sensors: list[str]) -> None:
             )
 
 
-def update_states(
-    state_metadata_id: int,
-    state: Decimal,
-    from_date: datetime,
-    to_date: datetime = datetime.now(),
-) -> None:
+def update_states(**kwargs) -> None:
     cur.execute(
         """
         UPDATE states 
-        SET state = ? 
+        SET state = :state 
         WHERE 
             last_changed_ts IS NULL AND 
-            states.metadata_id = ? AND 
+            states.metadata_id = :state_metadata_id AND 
             last_reported_ts IS NULL AND
-            last_updated_ts >= ? AND 
-            last_updated_ts < ?;
+            last_updated_ts >= :from_ts AND 
+            last_updated_ts < :to_ts ;
         """,
-        (state, state_metadata_id, from_date.timestamp(), to_date.timestamp()),
+        kwargs,
     )
 
 
-def update_statistics(
-    state: Decimal,
-    sum: Decimal,
-    statistics_metadata_id: int,
-    from_date: datetime,
-    to_date: datetime = datetime.now(),
-) -> None:
+def update_statistics(**kwargs) -> None:
     for table in ["statistics", "statistics_short_term"]:
         cur.execute(
-            """
-            UPDATE ?
-            SET state = ?, sum = ? 
+            f"""
+            UPDATE {table}
+            SET state = :state, sum = ROUND(sum + state - :state, 2)
             WHERE 
-                metadata_id = ? AND
-                start_ts >= ? AND 
-                start_ts < ?;
+                metadata_id = :statistics_metadata_id AND
+                start_ts >= :from_ts AND 
+                start_ts < :to_ts ;
             """,
-            (
-                table,
-                state,
-                sum,
-                statistics_metadata_id,
-                from_date.timestamp(),
-                to_date.timestamp(),
-            ),
+            kwargs,
         )
 
 
-def get_latest_state_and_sum(
-    state_metadata_id: int, statistics_metadata_id: int
-) -> tuple[Decimal, Decimal]:
+def get_state(state_metadata_id: int) -> Decimal:
     res = cur.execute(
         "SELECT state FROM states WHERE metadata_id = ? ORDER BY state_id DESC LIMIT 1;",
         (state_metadata_id,),
     )
     (state,) = res.fetchone()
-    res = cur.execute(
-        "SELECT sum FROM statistics WHERE metadata_id = ? ORDER BY id DESC LIMIT 1;",
-        (statistics_metadata_id,),
-    )
-    (sum,) = res.fetchone()
-    return Decimal(state), Decimal(str(sum))
+    return Decimal(state)
 
 
 if __name__ == "__main__":
