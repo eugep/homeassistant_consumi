@@ -1,8 +1,8 @@
-# Import energy data from Portale Consumi to Home Assistant
+# Letture Portale Consumi ARERA → Home Assistant
 
 Import csv file downloaded from the ARERA [Portale Consumi](https://www.consumienergia.it/) to Home Assistant [Energy Management](https://www.home-assistant.io/docs/energy/).
 
-The script provided read a csv file containing the gas or energy measurements and import the data as [long- and short-term statistics](https://data.home-assistant.io/docs/statistics) into [Home Assistant Database](https://www.home-assistant.io/docs/backend/database/).
+The provided script read a csv file containing the gas or energy measurements and import the data as [long- and short-term statistics](https://data.home-assistant.io/docs/statistics) into [Home Assistant Database](https://www.home-assistant.io/docs/backend/database/).
 
 ## Download csv measurements file
 
