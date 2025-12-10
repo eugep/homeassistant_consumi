@@ -15,6 +15,13 @@ class Lettura:
     def lettura(self) -> Decimal:
         return NotImplemented
 
+    @property
+    def timestamp(self) -> float:
+        return self.data_lettura.timestamp()
+
+    def __float__(self) -> float:
+        return float(self.lettura)
+
     def __lt__(self, value) -> bool:
         if isinstance(value, Lettura):
             return self.data_lettura < value.data_lettura
@@ -75,32 +82,34 @@ class LetturaLuce(Lettura):
 
 
 def import_letture(letture: list[Lettura], sensor_name: str) -> None:
-    state_metadata_id, statistics_metadata_id = get_metadata_ids(
-        id=f"sensor.{sensor_name}"
-    )
-    print(f"Importing statistics to sensor '{sensor_name}'.")
-    letture.sort()
-    for i in range(len(letture)):
+    id = f"sensor.{sensor_name}"
+    print(f"Importing statistics to '{id}'.")
+    state_metadata_id = get_state_metadata_id(id)
+    statistics_metadata_id = get_statistics_metadata_id(id)
+    for lettura in sorted(letture):
         data = {
-            "state": float(letture[i].lettura),
+            "state": float(lettura),
             "state_metadata_id": state_metadata_id,
             "statistics_metadata_id": statistics_metadata_id,
-            "min_ts": letture[i].data_lettura.timestamp(),
-            "max_ts": (
-                letture[i + 1].data_lettura if i + 1 < len(letture) else datetime.now()
-            ).timestamp(),
+            "min_ts": lettura.timestamp,
         }
         update_states(**data)
         update_statistics(**data)
-        print(f"Imported {letture[i]}.")
+        print(f"Imported {lettura}.")
 
 
-def get_metadata_ids(id: str) -> tuple[int, int]:
-    res = cur.execute("SELECT metadata_id FROM states_meta WHERE entity_id = ?", (id,))
-    (state_metadata_id,) = res.fetchone()
-    res = cur.execute("SELECT id FROM statistics_meta WHERE statistic_id = ?", (id,))
-    (statistics_metadata_id,) = res.fetchone()
-    return state_metadata_id, statistics_metadata_id
+def get_state_metadata_id(entity_id: str) -> int:
+    res = cur.execute(
+        "SELECT metadata_id FROM states_meta WHERE entity_id = ?", (entity_id,)
+    )
+    return res.fetchone()[0]
+
+
+def get_statistics_metadata_id(statistic_id: str) -> int:
+    res = cur.execute(
+        "SELECT id FROM statistics_meta WHERE statistic_id = ?", (statistic_id,)
+    )
+    return res.fetchone()[0]
 
 
 def update_states(**kwargs) -> None:
@@ -111,8 +120,7 @@ def update_states(**kwargs) -> None:
         WHERE
             state < :state AND
             states.metadata_id = :state_metadata_id AND
-            last_updated_ts >= :min_ts AND
-            last_updated_ts < :max_ts;
+            last_updated_ts >= :min_ts;
         """,
         kwargs,
     )
@@ -127,8 +135,7 @@ def update_statistics(**kwargs) -> None:
             WHERE
                 state < :state AND
                 metadata_id = :statistics_metadata_id AND
-                start_ts >= :min_ts AND
-                start_ts < :max_ts;
+                start_ts >= :min_ts;
             """,
             kwargs,
         )
