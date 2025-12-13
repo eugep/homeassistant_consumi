@@ -131,7 +131,7 @@ def update_statistics(**kwargs) -> None:
         cur.execute(
             f"""
             UPDATE {table}
-            SET state = :state, sum = ROUND(sum + state - :state, 3)
+            SET state = :state, sum = ROUND(sum + :state - state, 3)
             WHERE
                 state < :state AND
                 metadata_id = :statistics_metadata_id AND
