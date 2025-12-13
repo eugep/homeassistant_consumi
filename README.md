@@ -23,14 +23,12 @@ For instance:
 
 ## Run the script
 
-1. `Stop` your Home Assistant instance.
-2. Run the script with the following command _(replace csv and db filepaths)_ .
+Run the script with the following command (replace _csv_ and _db_ filepaths).
 ```
 ./import_statistics.py <csv_filepath> --db <db_filepath>
 ```
-3. `Restart` your Home Assistant instance.
 
-Open your Home Assistant Energy Dashboard and you should see the updated charts with the new data imported.
+Open your Home Assistant Energy Dashboard and you'll see the updated charts with the new data imported.
 
 ![Energy usage graph](https://www.home-assistant.io/images/dashboards/energy/usage-graph.png)
 

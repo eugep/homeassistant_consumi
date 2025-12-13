@@ -172,7 +172,6 @@ def main(filename: str):
                 letture=letture,
                 sensor_name=f"lettura_luce_f{i}",
             )
-    print("Done.")
 
 
 def lt(arg1, arg2) -> bool:
